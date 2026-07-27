@@ -1,5 +1,1 @@
-.venv/
-__pycache__/
-*.pyc
-zoomies.db
-.env
+web: gunicorn app:app
