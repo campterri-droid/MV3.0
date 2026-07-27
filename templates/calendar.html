@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Calendar · Zoomies OS{% endblock %}
+{% block content %}
+<div class="hero">
+  <div><h1>Daily Calendar</h1><p>Two-hour blocks; no overlap; lunch protected.</p></div>
+  <form method="get"><input type="date" name="date" value="{{ selected_date }}" onchange="this.form.submit()"></form>
+</div>
+{% if holiday %}<div class="flash warning"><b>{{ holiday }}</b>: staffed grooming is blocked. Self-wash remains available.</div>{% endif %}
+<div class="calendar">
+  <div class="head">Time</div>
+  {% for groomer in groomers %}<div class="head">{{ groomer }}</div>{% endfor %}
+  {% for start,end in slots %}
+    <div class="time">{{ start }}–{{ end }}</div>
+    {% for groomer in groomers %}
+      {% set ns = namespace(appt=None, block=None) %}
+      {% for a in appointments %}
+        {% if a.groomer == groomer and a.start_time == start %}{% set ns.appt = a %}{% endif %}
+      {% endfor %}
+      {% for b in blocks %}
+        {% if (b.groomer == groomer or b.groomer == 'All Groomers') and b.start_time < end and start < b.end_time %}{% set ns.block = b %}{% endif %}
+      {% endfor %}
+      {% if holiday %}
+        <div class="cell blocked"><b>Holiday</b><small>{{ holiday }}</small></div>
+      {% elif ns.appt %}
+        <div class="cell booked"><b>{{ ns.appt.dog_name }}</b><small>{{ ns.appt.service }}</small></div>
+      {% elif ns.block %}
+        <div class="cell blocked"><b>{{ ns.block.block_type }}</b><small>{{ ns.block.note or 'Unavailable' }}</small></div>
+      {% else %}
+        <div class="cell available">Available</div>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+</div>
+{% endblock %}

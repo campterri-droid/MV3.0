@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Login · Zoomies OS{% endblock %}
+{% block content %}
+<div class="login-card card">
+  <h1>Welcome to Zoomies OS</h1>
+  <p class="muted">Use one of the seeded accounts below.</p>
+  <form method="post" class="stack">
+    <label>Email<input name="email" type="email" required></label>
+    <label>Password<input name="password" type="password" required></label>
+    <button class="primary">Log in</button>
+  </form>
+  <div class="demo-accounts">
+    <p><b>Admin:</b> admin@zoomies.local</p>
+    <p><b>Staff:</b> staff@zoomies.local</p>
+    <p><b>Customer:</b> customer@zoomies.local</p>
+    <p><b>Password:</b> Zoomies123!</p>
+  </div>
+</div>
+{% endblock %}

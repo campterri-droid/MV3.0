@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Customer Portal · Zoomies OS{% endblock %}
+{% block content %}
+<div class="hero">
+  <div><h1>Welcome, {{ session.name }}</h1><p>Manage dogs and grooming appointments.</p></div>
+  <a class="button primary" href="{{ url_for('book') }}">Book Appointment</a>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h2>My Dogs</h2>
+    {% for dog in dogs %}
+      <div class="row"><div><b>{{ dog.name }}</b><small>{{ dog.breed }} · {{ dog.coat_goals }}</small></div><span class="pill">Active</span></div>
+    {% endfor %}
+  </div>
+  <div class="card">
+    <h2>Appointments</h2>
+    {% for a in appointments %}
+      <div class="row">
+        <div><b>{{ a.appointment_date }} · {{ a.start_time }}</b><small>{{ a.dog_name }} · {{ a.service }} · {{ a.groomer }}</small></div>
+        <form method="post" action="{{ url_for('cancel_appointment', appointment_id=a.id) }}"><button class="danger">Cancel</button></form>
+      </div>
+    {% else %}<p class="muted">No upcoming appointments.</p>{% endfor %}
+  </div>
+</div>
+{% endblock %}
