@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Availability · Zoomies OS{% endblock %}
+{% block content %}
+<div class="hero"><div><h1>Groomer Availability</h1><p>Save days off, partial-day blocks, training, and salon closures.</p></div></div>
+<div class="grid2">
+  <div class="card">
+    <h2>Add Schedule Block</h2>
+    <form method="post" class="formgrid">
+      <label>Groomer<select name="groomer">{% for g in groomers %}<option>{{ g }}</option>{% endfor %}<option>All Groomers</option></select></label>
+      <label>Type<select name="block_type"><option>Day Off</option><option>Unavailable</option><option>Training</option><option>Salon Closure</option></select></label>
+      <label>Date<input type="date" name="block_date" value="{{ today }}" required></label>
+      <label>Start<input type="time" name="start_time" value="08:00" required></label>
+      <label>End<input type="time" name="end_time" value="17:00" required></label>
+      <label>Note<input name="note" placeholder="Optional reason"></label>
+      <button class="primary full">Save Block</button>
+    </form>
+    <p class="note">“All Groomers” blocks staffed grooming only. Self-wash remains available unless separately disabled.</p>
+  </div>
+  <div class="card">
+    <h2>Automatic Rules</h2>
+    <ul class="rules">
+      <li>Two-hour appointment blocks</li>
+      <li>No overlapping groomer appointments</li>
+      <li>Lunch blocked daily from 12:00–1:00 PM</li>
+      <li>U.S. federal holidays blocked for groomers</li>
+      <li>Self-wash available on holidays</li>
+    </ul>
+  </div>
+</div>
+<div class="grid2">
+  <div class="card">
+    <h2>Saved Schedule Blocks</h2>
+    {% for b in blocks %}
+      <div class="row">
+        <div><b>{{ b.groomer }} · {{ b.block_type }}</b><small>{{ b.block_date }} · {{ b.start_time }}–{{ b.end_time }} · {{ b.note or '' }}</small></div>
+        <form method="post" action="{{ url_for('delete_availability', block_id=b.id) }}"><button class="danger">Remove</button></form>
+      </div>
+    {% else %}<p class="muted">No saved blocks.</p>{% endfor %}
+  </div>
+  <div class="card">
+    <h2>Federal Holidays</h2>
+    {% for h in holidays %}
+      <div class="row">
+        <div><b>{{ h.name }}</b><small>{{ h.observed.isoformat() }}{% if h.observed != h.date %} · observed{% endif %}</small></div>
+        <span class="pill danger-pill">Groomers blocked</span>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

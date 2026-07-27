@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Employee Dashboard · Zoomies OS{% endblock %}
+{% block content %}
+<div class="hero">
+  <div><h1>Employee Dashboard</h1><p>Persistent scheduling, customer bookings, availability, and holiday rules.</p></div>
+  <a class="button primary" href="{{ url_for('availability') }}">Modify Groomer Schedule</a>
+</div>
+<div class="grid3">
+  <div class="card stat"><span>Today</span><b>{{ today }}</b></div>
+  <div class="card stat"><span>Appointments</span><b>{{ appointments|length }}</b></div>
+  <div class="card stat"><span>Lunch Block</span><b>12–1 PM</b></div>
+</div>
+<div class="card">
+  <h2>Today's Appointments</h2>
+  {% if appointments %}
+    {% for a in appointments %}
+      <div class="row">
+        <div><b>{{ a.start_time }}–{{ a.end_time }}</b><small>{{ a.groomer }}</small></div>
+        <div><b>{{ a.dog_name }}</b><small>{{ a.customer_name }} · {{ a.service }}</small></div>
+        <span class="pill">{{ a.status }}</span>
+      </div>
+    {% endfor %}
+  {% else %}<p class="muted">No appointments today.</p>{% endif %}
+</div>
+{% endblock %}
