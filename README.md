@@ -95,3 +95,13 @@ If using **New → Web Service** instead:
 - Health check path: `/health`
 
 If the files are inside a subfolder, enter that exact folder in Render's **Root Directory** field.
+
+
+## MVP 3.2 added
+- Staff appointment creation
+- Shared groomer revenue/tip splits
+- Customer and dog creation
+- Dashboard search by customer, dog, breed, phone, or email
+- Groomer Center with commission rates
+- Complete Groom financial posting
+- Payroll report based only on closed appointments

@@ -99,6 +99,43 @@ def init_db() -> None:
         ON availability_blocks(groomer, block_date, start_time, end_time);
         """
     )
+    # Safe, repeatable schema upgrades for existing Render databases.
+    def add_column(table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    add_column("users", "phone", "TEXT")
+    add_column("appointments", "actual_revenue", "REAL DEFAULT 0")
+    add_column("appointments", "reported_tips", "REAL DEFAULT 0")
+    add_column("appointments", "closed_at", "TEXT")
+    add_column("appointments", "secondary_groomer", "TEXT")
+    add_column("appointments", "primary_split", "REAL DEFAULT 100")
+    add_column("appointments", "secondary_split", "REAL DEFAULT 0")
+
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS groomer_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            commission_rate REAL NOT NULL DEFAULT 50,
+            active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS appointment_financials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            appointment_id INTEGER NOT NULL,
+            groomer TEXT NOT NULL,
+            revenue_share REAL NOT NULL DEFAULT 0,
+            commission_amount REAL NOT NULL DEFAULT 0,
+            tip_share REAL NOT NULL DEFAULT 0,
+            posted_at TEXT NOT NULL,
+            UNIQUE(appointment_id, groomer),
+            FOREIGN KEY(appointment_id) REFERENCES appointments(id) ON DELETE CASCADE
+        );
+        """
+    )
+    for groomer in GROOMERS:
+        db.execute("INSERT OR IGNORE INTO groomer_profiles(name,commission_rate,active) VALUES(?,50,1)", (groomer,))
     db.commit()
 
 
@@ -444,6 +481,173 @@ def cancel_appointment(appointment_id: int):
 @app.route("/kiosk")
 def kiosk():
     return render_template("kiosk.html")
+
+
+
+@app.route("/search")
+@roles_required("admin", "employee")
+def dashboard_search():
+    q = request.args.get("q", "").strip()
+    rows = []
+    if q:
+        like = f"%{q}%"
+        digits = "".join(ch for ch in q if ch.isdigit())
+        db = get_db()
+        rows = db.execute(
+            """SELECT d.id AS dog_id, d.name AS dog_name, d.breed, u.id AS customer_id,
+                      u.name AS customer_name, COALESCE(u.phone,'') AS phone, u.email
+               FROM dogs d JOIN users u ON u.id=d.owner_user_id
+               WHERE u.role='customer' AND
+                 (u.name LIKE ? OR d.name LIKE ? OR d.breed LIKE ? OR u.email LIKE ?
+                  OR REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(u.phone,''),'(',''),')',''),'-',''),' ','') LIKE ?)
+               ORDER BY u.name, d.name LIMIT 50""",
+            (like, like, like, like, f"%{digits}%"),
+        ).fetchall()
+    return render_template("search.html", q=q, rows=rows)
+
+
+@app.route("/appointments")
+@roles_required("admin", "employee")
+def appointments_list():
+    status = request.args.get("status", "active")
+    db = get_db()
+    clause = "a.status!='Cancelled'" if status == "active" else "1=1"
+    appointments = db.execute(
+        f"""SELECT a.*, d.name AS dog_name, d.breed, u.name AS customer_name, u.phone
+            FROM appointments a JOIN dogs d ON d.id=a.dog_id JOIN users u ON u.id=a.customer_user_id
+            WHERE {clause} ORDER BY a.appointment_date DESC, a.start_time DESC LIMIT 250"""
+    ).fetchall()
+    return render_template("appointments.html", appointments=appointments, status=status)
+
+
+@app.route("/appointments/new", methods=["GET", "POST"])
+@roles_required("admin", "employee")
+def new_appointment():
+    db = get_db()
+    dogs = db.execute("""SELECT d.id, d.name AS dog_name, d.breed, u.id AS customer_id, u.name AS customer_name
+                         FROM dogs d JOIN users u ON u.id=d.owner_user_id ORDER BY u.name,d.name""").fetchall()
+    groomers = [r["name"] for r in db.execute("SELECT name FROM groomer_profiles WHERE active=1 ORDER BY name").fetchall()]
+    if request.method == "POST":
+        dog_id = int(request.form["dog_id"])
+        dog = db.execute("SELECT * FROM dogs WHERE id=?", (dog_id,)).fetchone()
+        groomer = request.form["groomer"]
+        secondary = request.form.get("secondary_groomer") or None
+        appt_date = request.form["appointment_date"]
+        start = request.form["start_time"]
+        end = request.form["end_time"]
+        primary_split = float(request.form.get("primary_split") or 100)
+        secondary_split = 100-primary_split if secondary else 0
+        if secondary == groomer:
+            flash("Primary and secondary groomers must be different.", "error")
+        elif abs(primary_split + secondary_split - 100) > .01:
+            flash("Groomer splits must total 100%.", "error")
+        elif slot_unavailable(groomer, appt_date, start, end) or (secondary and slot_unavailable(secondary, appt_date, start, end)):
+            flash("One of the selected groomers is unavailable during that time.", "error")
+        else:
+            db.execute("""INSERT INTO appointments
+              (dog_id,customer_user_id,groomer,secondary_groomer,primary_split,secondary_split,service,
+               appointment_date,start_time,end_time,notes,status,created_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (dog_id,dog["owner_user_id"],groomer,secondary,primary_split,secondary_split,request.form["service"],
+               appt_date,start,end,request.form.get("notes",""),"Confirmed",datetime.now().isoformat(timespec="seconds")))
+            db.commit(); flash("Appointment created.", "success"); return redirect(url_for("calendar_view", date=appt_date))
+    return render_template("new_appointment.html", dogs=dogs, groomers=groomers, today=date.today().isoformat())
+
+
+@app.route("/appointment/<int:appointment_id>")
+@roles_required("admin", "employee")
+def appointment_detail(appointment_id):
+    db=get_db()
+    a=db.execute("""SELECT a.*,d.name dog_name,d.breed,d.medical_notes,d.behavior_notes,d.coat_goals,
+                            u.name customer_name,u.phone,u.email
+                     FROM appointments a JOIN dogs d ON d.id=a.dog_id JOIN users u ON u.id=a.customer_user_id
+                     WHERE a.id=?""",(appointment_id,)).fetchone()
+    if not a: flash("Appointment not found.","error"); return redirect(url_for("appointments_list"))
+    financials=db.execute("SELECT * FROM appointment_financials WHERE appointment_id=?",(appointment_id,)).fetchall()
+    return render_template("appointment_detail.html",a=a,financials=financials)
+
+
+@app.post("/appointment/<int:appointment_id>/close")
+@roles_required("admin", "employee")
+def close_appointment(appointment_id):
+    db=get_db(); a=db.execute("SELECT * FROM appointments WHERE id=?",(appointment_id,)).fetchone()
+    if not a: flash("Appointment not found.","error"); return redirect(url_for("appointments_list"))
+    if a["status"] == "Closed": flash("This appointment is already closed.","error"); return redirect(url_for("appointment_detail",appointment_id=appointment_id))
+    revenue=max(float(request.form.get("actual_revenue") or 0),0); tips=max(float(request.form.get("reported_tips") or 0),0)
+    posted=datetime.now().isoformat(timespec="seconds")
+    people=[(a["groomer"],float(a["primary_split"] or 100))]
+    if a["secondary_groomer"]: people.append((a["secondary_groomer"],float(a["secondary_split"] or 0)))
+    for name,split in people:
+        profile=db.execute("SELECT commission_rate FROM groomer_profiles WHERE name=?",(name,)).fetchone()
+        rate=float(profile["commission_rate"] if profile else 50)
+        rev_share=revenue*split/100; tip_share=tips*split/100
+        db.execute("""INSERT OR REPLACE INTO appointment_financials
+          (appointment_id,groomer,revenue_share,commission_amount,tip_share,posted_at) VALUES(?,?,?,?,?,?)""",
+          (appointment_id,name,rev_share,rev_share*rate/100,tip_share,posted))
+    db.execute("UPDATE appointments SET status='Closed',actual_revenue=?,reported_tips=?,closed_at=? WHERE id=?",
+               (revenue,tips,posted,appointment_id)); db.commit()
+    flash("Groom closed. Revenue, commission, and reported tips are now posted.","success")
+    return redirect(url_for("appointment_detail",appointment_id=appointment_id))
+
+
+@app.route("/dogs")
+@roles_required("admin", "employee")
+def dogs_list():
+    rows=get_db().execute("""SELECT d.*,u.name customer_name,u.phone,u.email FROM dogs d
+                              JOIN users u ON u.id=d.owner_user_id ORDER BY d.name""").fetchall()
+    return render_template("dogs.html",dogs=rows)
+
+
+@app.route("/customers/new", methods=["GET","POST"])
+@roles_required("admin", "employee")
+def new_customer():
+    if request.method=="POST":
+        db=get_db(); email=request.form["email"].strip().lower()
+        try:
+            cur=db.execute("INSERT INTO users(email,password_hash,name,role,phone) VALUES(?,?,?,?,?)",
+              (email,generate_password_hash(request.form.get("password") or "Welcome123!"),request.form["name"],"customer",request.form.get("phone","")))
+            db.commit(); flash("Customer created. Add their dog next.","success"); return redirect(url_for("new_dog",customer_id=cur.lastrowid))
+        except sqlite3.IntegrityError: flash("That email is already in use.","error")
+    return render_template("new_customer.html")
+
+
+@app.route("/dogs/new", methods=["GET","POST"])
+@roles_required("admin", "employee")
+def new_dog():
+    db=get_db(); customers=db.execute("SELECT id,name,email FROM users WHERE role='customer' ORDER BY name").fetchall()
+    selected=request.values.get("customer_id","")
+    if request.method=="POST":
+        db.execute("""INSERT INTO dogs(owner_user_id,name,breed,birthdate,medical_notes,behavior_notes,coat_goals,vaccination_expiry)
+                      VALUES(?,?,?,?,?,?,?,?)""",(request.form["customer_id"],request.form["name"],request.form.get("breed",""),
+                      request.form.get("birthdate",""),request.form.get("medical_notes",""),request.form.get("behavior_notes",""),
+                      request.form.get("coat_goals",""),request.form.get("vaccination_expiry","")))
+        db.commit(); flash("Dog profile created.","success"); return redirect(url_for("dogs_list"))
+    return render_template("new_dog.html",customers=customers,selected=selected)
+
+
+@app.route("/groomers", methods=["GET","POST"])
+@roles_required("admin", "employee")
+def groomer_center():
+    db=get_db()
+    if request.method=="POST":
+        name=request.form["name"].strip(); rate=float(request.form.get("commission_rate") or 0)
+        db.execute("INSERT INTO groomer_profiles(name,commission_rate,active) VALUES(?,?,1) ON CONFLICT(name) DO UPDATE SET commission_rate=excluded.commission_rate,active=1",(name,rate)); db.commit(); flash("Groomer profile saved.","success")
+    rows=db.execute("""SELECT gp.*,COALESCE(SUM(af.revenue_share),0) revenue,COALESCE(SUM(af.commission_amount),0) commission,
+                              COALESCE(SUM(af.tip_share),0) tips
+                       FROM groomer_profiles gp LEFT JOIN appointment_financials af ON af.groomer=gp.name
+                       GROUP BY gp.id ORDER BY gp.name""").fetchall()
+    return render_template("groomers.html",groomers=rows)
+
+
+@app.route("/payroll")
+@roles_required("admin")
+def payroll_report():
+    start=request.args.get("start") or date.today().replace(day=1).isoformat(); end=request.args.get("end") or date.today().isoformat()
+    rows=get_db().execute("""SELECT af.groomer,SUM(af.revenue_share) revenue,SUM(af.commission_amount) commission,SUM(af.tip_share) tips,
+                                    COUNT(DISTINCT af.appointment_id) closed_grooms
+                             FROM appointment_financials af JOIN appointments a ON a.id=af.appointment_id
+                             WHERE date(a.closed_at) BETWEEN ? AND ? GROUP BY af.groomer ORDER BY af.groomer""",(start,end)).fetchall()
+    return render_template("payroll.html",rows=rows,start=start,end=end)
 
 
 @app.get("/health")
